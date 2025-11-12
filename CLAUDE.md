@@ -86,6 +86,60 @@ v2.0+: Adiciona estrutura onde v1.0 DOEU
 - Código autodocumentado (nomes claros > comentários excessivos)
 - Documentação clara de pontos de extensão **reais**
 
+## Git Workflow (OBRIGATÓRIO)
+
+### Regra de Ouro: NUNCA trabalhar diretamente na `main`
+
+**SEMPRE use feature branches para qualquer implementação.**
+
+#### Processo Padrão:
+
+```bash
+# 1. Garantir que main está atualizada
+git checkout main
+git pull origin main
+
+# 2. Criar feature branch com nome descritivo
+git checkout -b feature/nome-descritivo
+
+# 3. Implementar, testar, commitar na feature branch
+git add .
+git commit -m "feat: descrição"
+
+# 4. Revisar código (se necessário)
+/compounding-engineering:review
+
+# 5. Após aprovação, mergear na main
+git checkout main
+git merge feature/nome-descritivo
+
+# 6. (Opcional) Deletar feature branch
+git branch -d feature/nome-descritivo
+```
+
+#### Nomenclatura de Branches:
+
+- **Features:** `feature/nome-descritivo` (ex: `feature/v2-implementation`)
+- **Bugfixes:** `fix/nome-do-bug` (ex: `fix/weekend-detection`)
+- **Docs:** `docs/nome-doc` (ex: `docs/update-readme`)
+- **Refactor:** `refactor/nome` (ex: `refactor/simplify-config`)
+
+#### Por quê?
+
+- ✅ **main sempre estável** - Código funcional garantido
+- ✅ **Experimentação segura** - Pode quebrar à vontade na branch
+- ✅ **Histórico limpo** - Commits organizados por propósito
+- ✅ **Facilita review** - Isola mudanças para revisão
+- ✅ **Preparado para CI/CD** - Se configurar depois, main nunca quebra
+
+#### ❌ Red Flags:
+
+- Commitar diretamente na `main` (exceto `.gitignore`, `README` inicial)
+- Branches sem prefixo (`feature/`, `fix/`, etc.)
+- Feature branches que vivem por semanas (mergear frequentemente)
+
+---
+
 ## Stack Técnica
 
 ### Linguagem
