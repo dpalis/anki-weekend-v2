@@ -228,21 +228,96 @@ def apply_weekend_mode() -> None:
     Set new cards per day = 0 for all decks.
     Stores original limits before modification for later restoration.
     Changes are marked for AnkiWeb sync automatically.
+
+    Note: On first run during weekend with limits already at 0,
+    waits until weekday to capture real original values.
+
+    Error handling: Failures on individual decks don't prevent
+    processing other decks. Errors are logged but don't propagate.
     """
-    if not mw.col:
+    # Store collection reference once to prevent race conditions
+    col = mw.col
+    if not col:
         return
 
-    for deck_id in mw.col.decks.all_names_and_ids():
-        deck = mw.col.decks.get_legacy(deck_id.id)
-        config = mw.col.decks.get_config(deck['conf'])
+    success_count = 0
+    skip_count = 0
+    error_count = 0
 
-        # Store original if not already stored
-        if get_original_limit(deck['conf']) is None:
-            store_original_limit(deck['conf'], config['new']['perDay'])
+    # Get deck list with error handling
+    try:
+        deck_ids = col.decks.all_names_and_ids()
+    except Exception as e:
+        print(f"[Weekend Addon] ERROR: Failed to get deck list: {e}")
+        return
 
-        # Set limit to 0
-        config['new']['perDay'] = 0
-        mw.col.decks.save(config)  # Marks for AnkiWeb sync
+    for deck_id in deck_ids:
+        try:
+            # Get deck
+            deck = col.decks.get_legacy(deck_id.id)
+            if not deck:
+                skip_count += 1
+                continue
+
+            # Verify deck structure
+            if 'conf' not in deck:
+                print(f"[Weekend Addon] WARNING: Deck {deck_id.id} has no 'conf', skipping")
+                skip_count += 1
+                continue
+
+            # Get deck config
+            config = col.decks.get_config(deck['conf'])
+            if not config:
+                print(f"[Weekend Addon] WARNING: Config {deck['conf']} not found, skipping")
+                skip_count += 1
+                continue
+
+            # Verify config structure
+            if 'new' not in config or 'perDay' not in config['new']:
+                print(f"[Weekend Addon] WARNING: Config {deck['conf']} has unexpected structure, skipping")
+                skip_count += 1
+                continue
+
+            # Capture original if not already stored
+            if get_original_limit(deck['conf']) is None:
+                try:
+                    current_limit = config['new']['perDay']
+
+                    # Safe capture logic
+                    if current_limit > 0:
+                        # Safe: positive value is reliable
+                        store_original_limit(deck['conf'], current_limit)
+                    elif not is_weekend():
+                        # Weekday with limit=0: user really wants 0
+                        store_original_limit(deck['conf'], 0)
+                    # Else: Weekend with limit=0: WAIT for weekday
+                    # (don't store anything yet)
+                except Exception as e:
+                    print(f"[Weekend Addon] WARNING: Failed to store original limit for config {deck['conf']}: {e}")
+                    # Continue anyway - at least pause the deck
+
+            # Set limit to 0
+            config['new']['perDay'] = 0
+            col.decks.save(config)
+            success_count += 1
+
+        except (KeyError, AttributeError, TypeError) as e:
+            # Structure/type errors - specific deck issue
+            error_count += 1
+            print(f"[Weekend Addon] ERROR processing deck {deck_id.id}: {type(e).__name__}: {e}")
+            continue
+
+        except Exception as e:
+            # Unexpected error - log but continue
+            error_count += 1
+            print(f"[Weekend Addon] UNEXPECTED ERROR processing deck {deck_id.id}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    # Log summary if there were issues
+    if error_count > 0 or skip_count > 0:
+        print(f"[Weekend Addon] Weekend mode applied: {success_count} success, {skip_count} skipped, {error_count} errors")
 
 
 def apply_weekday_mode() -> None:
@@ -250,19 +325,60 @@ def apply_weekday_mode() -> None:
     Restore original new cards per day limits for all decks.
     Only restores if original limit was previously stored.
     Changes are marked for AnkiWeb sync automatically.
+
+    Error handling: Failures on individual decks don't prevent
+    processing other decks. Errors are logged but don't propagate.
     """
-    if not mw.col:
+    # Store collection reference once to prevent race conditions
+    col = mw.col
+    if not col:
         return
 
-    for deck_id in mw.col.decks.all_names_and_ids():
-        deck = mw.col.decks.get_legacy(deck_id.id)
-        config = mw.col.decks.get_config(deck['conf'])
+    success_count = 0
+    skip_count = 0
+    error_count = 0
 
-        # Restore original if exists
-        original = get_original_limit(deck['conf'])
-        if original is not None:
-            config['new']['perDay'] = original
-            mw.col.decks.save(config)
+    try:
+        deck_ids = col.decks.all_names_and_ids()
+    except Exception as e:
+        print(f"[Weekend Addon] ERROR: Failed to get deck list: {e}")
+        return
+
+    for deck_id in deck_ids:
+        try:
+            deck = col.decks.get_legacy(deck_id.id)
+            if not deck or 'conf' not in deck:
+                skip_count += 1
+                continue
+
+            config = col.decks.get_config(deck['conf'])
+            if not config or 'new' not in config or 'perDay' not in config['new']:
+                skip_count += 1
+                continue
+
+            # Restore original if exists
+            original = get_original_limit(deck['conf'])
+            if original is not None:
+                config['new']['perDay'] = original
+                col.decks.save(config)
+                success_count += 1
+            else:
+                skip_count += 1
+
+        except (KeyError, AttributeError, TypeError) as e:
+            error_count += 1
+            print(f"[Weekend Addon] ERROR restoring deck {deck_id.id}: {type(e).__name__}: {e}")
+            continue
+
+        except Exception as e:
+            error_count += 1
+            print(f"[Weekend Addon] UNEXPECTED ERROR restoring deck {deck_id.id}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    if error_count > 0 or skip_count > 0:
+        print(f"[Weekend Addon] Weekday mode applied: {success_count} restored, {skip_count} skipped, {error_count} errors")
 
 
 # ==========================================
@@ -278,21 +394,31 @@ def on_profile_open() -> None:
         1. Travel mode (if enabled): Apply weekend mode
         2. Weekend (Sat/Sun): Apply weekend mode
         3. Weekday (Mon-Fri): Apply weekday mode (restore limits)
+
+    Error handling: Catches ALL exceptions to prevent Anki crash.
+    Addon may fail, but Anki continues working.
     """
-    if not mw.col:
-        return
+    try:
+        if not mw.col:
+            return
 
-    config = get_config()
+        config = get_config()
 
-    # Priority 1: Travel mode
-    if config.get('travel_mode', False):
-        apply_weekend_mode()
-    # Priority 2: Weekend
-    elif is_weekend():
-        apply_weekend_mode()
-    # Priority 3: Weekday
-    else:
-        apply_weekday_mode()
+        # Priority 1: Travel mode
+        if config.get('travel_mode', False):
+            apply_weekend_mode()
+        # Priority 2: Weekend
+        elif is_weekend():
+            apply_weekend_mode()
+        # Priority 3: Weekday
+        else:
+            apply_weekday_mode()
+
+    except Exception as e:
+        # CRITICAL: Don't let exception propagate to Anki
+        print(f"[Weekend Addon] CRITICAL ERROR in on_profile_open: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==========================================
