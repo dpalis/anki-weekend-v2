@@ -4,7 +4,7 @@ Anki Weekend Addon v2.0
 Pauses new cards on weekends (Saturday & Sunday) while keeping reviews active.
 Supports travel mode for extended pauses and cross-platform sync via AnkiWeb.
 
-Author: [Your Name]
+Author: Daniel Palis
 License: MIT
 Version: 2.0.0
 """
