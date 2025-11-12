@@ -99,23 +99,55 @@ v2.0+: Adiciona estrutura onde v1.0 DOEU
 git checkout main
 git pull origin main
 
-# 2. Criar feature branch com nome descritivo
-git checkout -b feature/nome-descritivo
+# 2. Criar feature/fix branch com nome descritivo
+git checkout -b feature/nome-descritivo  # ou fix/nome-bug
 
-# 3. Implementar, testar, commitar na feature branch
+# 3. Implementar, testar, commitar na branch
 git add .
 git commit -m "feat: descrição"
 
-# 4. Revisar código (se necessário)
-/compounding-engineering:review
+# 4. Push branch para remote
+git push -u origin feature/nome-descritivo
 
-# 5. Após aprovação, mergear na main
+# 5. CRIAR PULL REQUEST (OBRIGATÓRIO)
+gh pr create --title "feat: descrição" --body "Detalhes..."
+
+# 6. Aguardar review de outra instância
+# (Usar /compounding-engineering:review ou revisão manual)
+
+# 7. Após aprovação do PR, mergear
+gh pr merge <número>
+
+# 8. Voltar para main e atualizar
 git checkout main
-git merge feature/nome-descritivo
+git pull origin main
 
-# 6. (Opcional) Deletar feature branch
+# 9. (Opcional) Deletar feature branch
 git branch -d feature/nome-descritivo
 ```
+
+#### 🚨 REGRA CRÍTICA: Pull Requests são OBRIGATÓRIOS
+
+**NUNCA implemente mudanças diretamente sem criar PR primeiro.**
+
+**Fluxo correto quando mudanças são propostas:**
+
+1. **Receber proposta de mudança** (ex: issues de code review)
+2. **Criar branch** (`fix/nome-descritivo`)
+3. **Implementar mudanças**
+4. **Commit na branch**
+5. **Push para remote**
+6. **CRIAR PR** ← OBRIGATÓRIO
+7. **Aguardar review**
+8. **Mergear após aprovação**
+
+**❌ ERRADO:**
+- Implementar mudanças direto na branch atual
+- Commitar sem criar PR
+- Mergear sem review
+
+**✅ CORRETO:**
+- Criar branch → Implementar → PR → Review → Merge
 
 #### Nomenclatura de Branches:
 
