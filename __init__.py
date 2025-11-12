@@ -9,8 +9,46 @@ License: MIT
 Version: 2.0.0
 """
 
+from __future__ import annotations
+
 from aqt import mw, gui_hooks
 from datetime import datetime
+
+
+# ==========================================
+# Constants
+# ==========================================
+
+# Valid range for new cards per day (Anki's UI limits: 0-9999)
+MIN_NEW_CARDS = 0
+MAX_NEW_CARDS = 9999
+
+
+# ==========================================
+# Input Validation
+# ==========================================
+
+def validate_original_limit(limit: int) -> int:
+    """
+    Validate and sanitize original limit value.
+
+    Args:
+        limit: Original new cards per day limit to validate
+
+    Returns:
+        int: Sanitized limit within valid range [0-9999]
+
+    Raises:
+        TypeError: If limit is not an integer
+        ValueError: If limit is outside valid range
+    """
+    if not isinstance(limit, int):
+        raise TypeError(f"Limit must be integer, got {type(limit).__name__}")
+
+    if limit < MIN_NEW_CARDS or limit > MAX_NEW_CARDS:
+        raise ValueError(f"Limit must be between {MIN_NEW_CARDS} and {MAX_NEW_CARDS}, got {limit}")
+
+    return limit
 
 
 # ==========================================
@@ -31,19 +69,98 @@ def is_weekend() -> bool:
 # Config Management
 # ==========================================
 
-def get_config() -> dict:
+# Collection config key for redundant storage
+COLLECTION_CONFIG_KEY = "weekend_addon_original_limits"
+
+
+def _get_collection_limits() -> dict:
     """
-    Read addon configuration from config.json.
+    Get original limits from collection config (primary storage).
 
     Returns:
-        dict: Configuration dictionary with default empty dict if not found
+        dict: Original limits stored in collection, empty dict if not found
     """
-    return mw.addonManager.getConfig(__name__) or {}
+    if not mw.col:
+        return {}
+
+    try:
+        limits = mw.col.get_config(COLLECTION_CONFIG_KEY)
+        if limits is None or not isinstance(limits, dict):
+            return {}
+        return limits
+    except Exception as e:
+        print(f"[Weekend Addon] ERROR: Failed to read collection config: {e}")
+        return {}
+
+
+def _store_collection_limits(limits: dict) -> None:
+    """
+    Store original limits in collection config (primary storage).
+
+    Args:
+        limits: Dictionary mapping config_id -> original limit
+    """
+    if not mw.col:
+        return
+
+    try:
+        mw.col.set_config(COLLECTION_CONFIG_KEY, limits)
+    except Exception as e:
+        print(f"[Weekend Addon] ERROR: Failed to write collection config: {e}")
+
+
+def get_config() -> dict:
+    """
+    Read addon configuration from config.json with validation.
+
+    Returns:
+        dict: Configuration dictionary with defaults if corrupted/not found
+
+    Note:
+        Returns safe defaults if config is corrupted or invalid.
+        Logs errors for debugging.
+    """
+    try:
+        config = mw.addonManager.getConfig(__name__)
+        if config is None:
+            return {'travel_mode': False, 'original_limits': {}}
+
+        # Validate config structure
+        if not isinstance(config, dict):
+            print(f"[Weekend Addon] ERROR: Config is not a dict, got {type(config).__name__}")
+            return {'travel_mode': False, 'original_limits': {}}
+
+        # Ensure required keys exist with correct types
+        if 'travel_mode' not in config or not isinstance(config['travel_mode'], bool):
+            config['travel_mode'] = False
+
+        if 'original_limits' not in config or not isinstance(config['original_limits'], dict):
+            config['original_limits'] = {}
+
+        # Validate original_limits entries
+        validated_limits = {}
+        for config_id, limit in config['original_limits'].items():
+            try:
+                if not isinstance(limit, int):
+                    print(f"[Weekend Addon] WARNING: Limit for config {config_id} is not int, skipping")
+                    continue
+                validated_limits[config_id] = validate_original_limit(limit)
+            except (TypeError, ValueError) as e:
+                print(f"[Weekend Addon] WARNING: Invalid limit for config {config_id}: {e}")
+                continue
+
+        config['original_limits'] = validated_limits
+        return config
+
+    except Exception as e:
+        print(f"[Weekend Addon] ERROR: Failed to load config: {e}")
+        return {'travel_mode': False, 'original_limits': {}}
 
 
 def get_original_limit(config_id: int) -> int | None:
     """
     Retrieve stored original new cards per day limit for a deck config.
+    Uses redundant storage: primary (collection config) + fallback (addon config).
 
     Args:
         config_id: Deck configuration ID
@@ -51,22 +168,54 @@ def get_original_limit(config_id: int) -> int | None:
     Returns:
         int | None: Original limit if stored, None otherwise
     """
-    limits = get_config().get('original_limits', {})
-    return limits.get(str(config_id))
+    config_id_str = str(config_id)
+
+    # Try primary storage (collection config)
+    collection_limits = _get_collection_limits()
+    if config_id_str in collection_limits:
+        return collection_limits[config_id_str]
+
+    # Fallback to secondary storage (addon config)
+    addon_limits = get_config().get('original_limits', {})
+    limit = addon_limits.get(config_id_str)
+
+    # If found in fallback, sync to primary
+    if limit is not None and mw.col:
+        print(f"[Weekend Addon] INFO: Syncing limit for config {config_id} to collection storage")
+        collection_limits[config_id_str] = limit
+        _store_collection_limits(collection_limits)
+
+    return limit
 
 
 def store_original_limit(config_id: int, limit: int) -> None:
     """
     Store original new cards per day limit for future restoration.
+    Uses redundant storage: primary (collection config) + secondary (addon config).
 
     Args:
         config_id: Deck configuration ID
         limit: Original new cards per day limit to store
+
+    Raises:
+        TypeError: If limit is not an integer
+        ValueError: If limit is outside valid range
     """
+    # Validate limit before storing
+    validated_limit = validate_original_limit(limit)
+    config_id_str = str(config_id)
+
+    # Store in primary storage (collection config)
+    if mw.col:
+        collection_limits = _get_collection_limits()
+        collection_limits[config_id_str] = validated_limit
+        _store_collection_limits(collection_limits)
+
+    # Store in secondary storage (addon config) for redundancy
     config = get_config()
     if 'original_limits' not in config:
         config['original_limits'] = {}
-    config['original_limits'][str(config_id)] = limit
+    config['original_limits'][config_id_str] = validated_limit
     mw.addonManager.writeConfig(__name__, config)
 
 
