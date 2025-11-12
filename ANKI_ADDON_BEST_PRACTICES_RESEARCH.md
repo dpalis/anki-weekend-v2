@@ -23,7 +23,16 @@
 
 **DO NOT** try to modify the scheduler's card-gathering logic. The v3 scheduler is a ground-up rewrite that prevents monkey-patching.
 
-**RECOMMENDED APPROACH**: Use a hook to filter/skip new cards at display time, or temporarily modify deck settings (new card limit = 0) on weekends.
+**CROSS-PLATFORM REQUIREMENT**: Since this addon must work on both macOS (desktop) and iOS (AnkiMobile), the implementation MUST use data that syncs via AnkiWeb.
+
+**RECOMMENDED APPROACH**: Temporarily modify deck configuration (new card limit = 0) on weekends. This is the ONLY approach that works cross-platform:
+- ✅ Deck configuration syncs via AnkiWeb
+- ✅ Works on desktop AND mobile
+- ✅ Non-invasive to scheduler
+- ❌ Hooks DON'T sync (desktop-only behavior)
+- ❌ Rescheduling is too invasive to SRS algorithm
+
+See `research_cross_platform_behavior.md` for detailed analysis.
 
 ---
 
@@ -104,10 +113,10 @@ QueryOp(parent=mw, op=search_cards, success=on_success).run_in_background()
 
 **What This Means for Weekend Card Filtering:**
 
-You CANNOT intercept the scheduler's card-gathering logic directly. You must either:
-- **Option A**: Filter cards at display time using hooks
-- **Option B**: Temporarily modify deck configuration (set new card limit to 0 on weekends)
-- **Option C**: Reschedule cards to skip weekends (like AnkiWeekendsAndHolidays does)
+You CANNOT intercept the scheduler's card-gathering logic directly. Given the CROSS-PLATFORM requirement (macOS + iOS):
+- **Option A (Hooks)**: ❌ Desktop-only, won't work on AnkiMobile
+- **Option B (Deck Config)**: ✅ RECOMMENDED - Syncs to iOS via AnkiWeb
+- **Option C (Rescheduling)**: ⚠️ Works cross-platform but too invasive to SRS
 
 ---
 
@@ -117,9 +126,11 @@ You CANNOT intercept the scheduler's card-gathering logic directly. You must eit
 
 Based on research, here are three implementation strategies ranked by simplicity:
 
-#### Strategy 1: Deck Configuration Modification (SIMPLEST)
+#### Strategy 1: Deck Configuration Modification (RECOMMENDED FOR CROSS-PLATFORM)
 
 **Concept**: Temporarily set new card limit to 0 on weekends
+
+**✅ CRITICAL ADVANTAGE**: This approach syncs via AnkiWeb, making it work on iOS/Android!
 
 ```python
 from aqt import gui_hooks, mw
@@ -156,15 +167,20 @@ gui_hooks.profile_did_open.append(adjust_new_card_limit)
 ```
 
 **Pros**:
-- Simple, doesn't fight the scheduler
-- Works with v3 scheduler
-- Syncs across devices
-- Minimal code
+- ✅ Simple, doesn't fight the scheduler
+- ✅ Works with v3 scheduler
+- ✅ **Syncs across devices via AnkiWeb (iOS/Android support!)**
+- ✅ Minimal code
+- ✅ Non-invasive to SRS algorithm
 
 **Cons**:
-- Modifies user's deck configuration
-- Must track original limits
-- Doesn't hide "new cards available" indicator
+- ⚠️ Modifies user's deck configuration (reversible)
+- ⚠️ Must track original limits carefully
+- ⚠️ Doesn't hide "new cards available" indicator in UI
+
+**Cross-Platform Behavior**:
+- User sets weekend mode on macOS Friday → syncs → iOS Saturday shows 0 new cards ✅
+- User disables on Monday → syncs → iOS shows new cards again ✅
 
 #### Strategy 2: Card Display Interception (MODERATE)
 
@@ -193,30 +209,44 @@ gui_hooks.reviewer_will_show_question.append(before_show_question)
 ```
 
 **Pros**:
-- Doesn't modify deck configuration
-- Clear separation of concerns
-- Easy to toggle on/off
+- ✅ Doesn't modify deck configuration
+- ✅ Clear separation of concerns
+- ✅ Easy to toggle on/off
 
 **Cons**:
-- Still counts as "card seen" in some statistics
-- May need additional hooks to handle edge cases
-- Slightly more complex
+- ❌ **DESKTOP-ONLY: Hooks don't run on iOS/Android**
+- ⚠️ Still counts as "card seen" in some statistics
+- ⚠️ May need additional hooks to handle edge cases
+
+**Cross-Platform Behavior**:
+- macOS Friday: New cards skipped ✅
+- iOS Saturday: **New cards WILL appear** ❌ (addon not running)
+- **NOT SUITABLE for users who study on mobile**
 
 #### Strategy 3: Card Rescheduling (MOST FLEXIBLE)
 
 **Concept**: Move new cards' due dates to skip weekends (like AnkiWeekendsAndHolidays)
 
 **Pros**:
-- Most control over card scheduling
-- Works retroactively
-- Professional appearance
+- ✅ **Syncs to mobile** (scheduling data syncs via AnkiWeb)
+- ✅ Most control over card scheduling
+- ✅ Works retroactively
 
 **Cons**:
-- Most complex implementation
-- Modifies card scheduling data
-- Requires careful interval management (max 10% change)
+- ❌ **TOO INVASIVE**: Permanently modifies card scheduling
+- ❌ Violates SRS principles (changes intervals)
+- ❌ Most complex implementation
+- ❌ Difficult to undo once applied
+- ❌ Can conflict with other addons
 
-**Recommendation**: Start with Strategy 1 (deck configuration). Only move to Strategy 2/3 if you need more control.
+**Cross-Platform Behavior**:
+- Works on both desktop and mobile ✅
+- But at the cost of compromising SRS algorithm ❌
+
+**Recommendation**:
+- **For cross-platform users (macOS + iOS)**: Use Strategy 1 (deck configuration)
+- **For desktop-only users**: Strategy 2 (hooks) is simpler
+- **Avoid Strategy 3** unless you absolutely need retroactive rescheduling
 
 ### 2.2 Modular Design Pattern
 
@@ -1284,25 +1314,145 @@ zip -r weekend_pause.ankiaddon weekend_pause/
 
 ---
 
-## 10. Summary and Action Plan
+## 10. Cross-Platform Considerations (CRITICAL)
 
-### 10.1 Critical Success Factors
+### 10.1 The Mobile Problem
 
-1. **Use Modern Hooks**: `gui_hooks.reviewer_will_show_question`
-2. **Keep it Simple**: Single file, ~100 lines of code
-3. **Avoid Scheduler Modifications**: Work with v3 scheduler, not against it
-4. **Minimal State**: Use Anki's config system, no global variables
-5. **Test Early**: Write basic tests for weekend detection and config
+**Addons only run on desktop** (Windows/Mac/Linux). They do NOT run on:
+- AnkiMobile (iOS) ❌
+- AnkiDroid (Android) ❌
 
-### 10.2 Implementation Checklist
+**For users who study on multiple platforms**, addon behavior must work via synced data.
 
-**Phase 1: Core Functionality**
+### 10.2 What Syncs via AnkiWeb
+
+| Data Type | Syncs? | Use for Cross-Platform? |
+|-----------|--------|-------------------------|
+| Deck configuration (new card limits) | ✅ Yes | ✅ Recommended |
+| Card scheduling (due dates, intervals) | ✅ Yes | ⚠️ Too invasive |
+| Review history | ✅ Yes | N/A |
+| Addon code (Python) | ❌ No | ❌ Desktop-only |
+| Hook behavior | ❌ No | ❌ Desktop-only |
+| Addon config files | ❌ No | ❌ Desktop-only |
+
+### 10.3 Implementation Strategy for Cross-Platform
+
+**MUST USE: Deck Configuration Modification (Strategy 1)**
+
+This is the ONLY approach that:
+1. Syncs behavior to mobile via AnkiWeb
+2. Doesn't compromise SRS algorithm
+3. Is reversible and safe
+
+**User Flow Example**:
+```
+Friday night (macOS):
+- Addon detects weekend approaching
+- Saves original new_cards_per_day limits
+- Sets all decks to new_cards_per_day = 0
+- User syncs (automatic on close)
+- Config uploaded to AnkiWeb
+
+Saturday morning (iOS):
+- User opens AnkiMobile
+- Syncs, downloads deck config with limit=0
+- No new cards appear ✅
+- Reviews work normally ✅
+
+Monday morning (macOS):
+- Addon detects weekday
+- Restores original limits
+- Syncs to AnkiWeb
+
+Monday evening (iOS):
+- Syncs, downloads restored limits
+- New cards reappear ✅
+```
+
+### 10.4 Critical API Requirements
+
+**MUST use proper save method for sync**:
+```python
+# ✅ CORRECT - Marks for sync
+config = mw.col.decks.get_config(config_id)
+config["new"]["perDay"] = 0
+mw.col.decks.save(config)  # This marks for sync!
+
+# ❌ WRONG - Won't sync
+mw.col.db.execute("UPDATE...")  # Direct DB writes don't sync
+```
+
+**MUST track original limits carefully**:
+```python
+# Store in addon config
+addon_config = mw.addonManager.getConfig(__name__)
+addon_config['original_limits'][str(deck_id)] = original_limit
+mw.addonManager.writeConfig(__name__, addon_config)
+```
+
+### 10.5 Edge Cases to Handle
+
+1. **User modifies deck settings while addon active**
+   - Detect changes, update stored originals
+   - Warn user if conflicts detected
+
+2. **Sync timing issues**
+   - Encourage auto-sync on all devices
+   - Document sync requirements clearly
+
+3. **Addon disabled mid-weekend**
+   - Provide restore button to reset limits
+   - Don't leave limits stuck at 0
+
+4. **Multiple decks with different settings**
+   - Track limits per deck, not globally
+   - Handle deck creation/deletion
+
+### 10.6 User Documentation Requirements
+
+**MUST document**:
+1. Addon requires desktop Anki to modify settings
+2. Settings sync automatically to mobile via AnkiWeb
+3. Users must sync regularly for consistent behavior
+4. What to do if limits get stuck (restore function)
+
+**Example warning**:
+```
+⚠️ This addon modifies your deck configuration to pause new cards.
+Changes sync to AnkiMobile/AnkiDroid automatically.
+Make sure to sync regularly on all devices for consistent behavior.
+```
+
+### 10.7 Further Reading
+
+See detailed cross-platform research in:
+- `research_cross_platform_behavior.md` - Complete technical analysis
+- `RECOMMENDATIONS.md` - Implementation guidelines and code examples
+
+---
+
+## 11. Summary and Action Plan
+
+### 11.1 Critical Success Factors
+
+1. **✅ Cross-Platform First**: Use deck configuration modification (syncs via AnkiWeb)
+2. **✅ Proper API Usage**: Use `mw.col.decks.save()` to mark for sync
+3. **✅ Track State Carefully**: Store original limits per-deck in addon config
+4. **✅ Work with v3 Scheduler**: Don't try to monkey-patch
+5. **✅ Keep it Simple**: Clear, testable code focused on core functionality
+6. **✅ Handle Edge Cases**: Sync timing, user modifications, restore functionality
+7. **✅ Document Requirements**: Users must understand sync dependency
+
+### 11.2 Implementation Checklist
+
+**Phase 1: Core Functionality (Deck Config Approach)**
 - [ ] Set up addon file structure
 - [ ] Implement `is_weekend()` function
-- [ ] Implement `should_skip_new_cards()` function
-- [ ] Register `reviewer_will_show_question` hook
-- [ ] Create `config.json` with defaults
-- [ ] Test basic weekend skipping
+- [ ] Implement deck config modification logic
+- [ ] Track original limits in addon config (per-deck)
+- [ ] Use `mw.col.decks.save()` for sync
+- [ ] Test on macOS desktop
+- [ ] Test sync to iOS (critical!)
 
 **Phase 2: Configuration**
 - [ ] Add travel mode toggle
@@ -1317,18 +1467,21 @@ zip -r weekend_pause.ankiaddon weekend_pause/
 
 **Phase 4: Testing & Polish**
 - [ ] Write unit tests for pure logic
-- [ ] Test on Anki 25.x
+- [ ] Test on Anki 25.x desktop
+- [ ] **Test cross-platform sync (macOS ↔ iOS)**
 - [ ] Test with multiple decks
-- [ ] Check for edge cases
+- [ ] Test edge cases (sync timing, user modifications)
+- [ ] Test restore functionality
 - [ ] Review code for simplicity
 
 **Phase 5: Distribution**
 - [ ] Create manifest.json
-- [ ] Write user documentation
+- [ ] Write user documentation (emphasize sync requirement!)
+- [ ] Add warnings about cross-platform behavior
 - [ ] Package as .ankiaddon
 - [ ] Upload to AnkiWeb (optional)
 
-### 10.3 Key Resources
+### 11.3 Key Resources
 
 **Official Documentation:**
 - Addon Docs: https://addon-docs.ankiweb.net/
@@ -1348,21 +1501,32 @@ zip -r weekend_pause.ankiaddon weekend_pause/
 - Anki Forums: https://forums.ankiweb.net/
 - Development Section: https://forums.ankiweb.net/c/development/
 
+**Cross-Platform Research:**
+- `research_cross_platform_behavior.md` - Full technical deep-dive (50+ pages)
+- `RECOMMENDATIONS.md` - Implementation plan with code examples
+
 ---
 
-## Conclusion
+## 12. Conclusion
 
 The path to a simple, maintainable addon is through restraint:
 
-1. **Use the simplest solution that works** - Hook-based card skipping
-2. **Implement only what's needed now** - YAGNI principle
-3. **Prefer functions over classes** - Less abstraction
-4. **Work with Anki, not against it** - Use official APIs and hooks
-5. **Test the important parts** - Weekend detection, config logic
-6. **Keep it small** - Single file, <200 lines
+1. **✅ Cross-Platform First** - Deck config modification (NOT hooks) for iOS/Android support
+2. **✅ Implement only what's needed now** - YAGNI principle
+3. **✅ Prefer functions over classes** - Less abstraction
+4. **✅ Work with Anki, not against it** - Use official APIs that sync properly
+5. **✅ Test the important parts** - Weekend detection, config logic, **and cross-platform sync**
+6. **✅ Keep it small** - Focused modules, clear responsibilities
 
 Your v1.0 became complex through accumulation of fixes and features. v2.0 should be the opposite: minimal, focused, and maintainable.
 
-**Final Recommendation**: Start with the complete minimal implementation shown in Section 8.2, test thoroughly, and ONLY add features when they're explicitly needed.
+**Final Recommendation for Cross-Platform Users**:
+- ✅ Use Strategy 1 (Deck Configuration Modification)
+- ✅ Store original limits carefully (per-deck in addon config)
+- ✅ Use proper API (`mw.col.decks.save()`) to ensure sync
+- ✅ Test thoroughly on BOTH macOS and iOS
+- ✅ Document sync requirements clearly for users
+- ❌ Do NOT use hooks (desktop-only)
+- ❌ Do NOT reschedule cards (too invasive)
 
 Good luck with your rewrite!

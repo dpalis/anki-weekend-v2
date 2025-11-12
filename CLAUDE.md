@@ -22,28 +22,69 @@ A v2.0 é uma reescrita completa focada em **simplicidade, estabilidade e manute
 
 ## Princípios Arquiteturais
 
+### 0. PRINCÍPIO: Simplicidade Apropriada ⭐
+
+**Começar sempre com a solução mais simples que funciona.**
+**Adicionar complexidade APENAS quando necessário e JUSTIFICADO.**
+
+#### Regras:
+
+1. **Feature simples** (ex: este addon) → **Solução simples** (2-3 arquivos)
+2. **Feature complexa** (ex: multi-API) → **Solução estruturada apropriada**
+3. **SEMPRE questionar:** "Essa complexidade resolve problema REAL ou IMAGINÁRIO?"
+
+#### Red Flags (sinais de over-engineering):
+
+- ❌ Feature simples com estimativa > 5 dias
+- ❌ Código "preparado para o futuro" sem necessidade clara
+- ❌ Mais de 3 abstrações (classes/módulos) sem justificativa
+- ❌ "Mas e se precisarmos..." sem caso de uso concreto
+- ❌ Separação de arquivos quando total < 200 linhas
+
+#### Evolução Natural:
+
+```
+v1.0: Simples, aprende sobre o problema REAL
+  ↓
+  [Usar em produção, coletar feedback]
+  ↓
+v2.0+: Adiciona estrutura onde v1.0 DOEU
+  ↓
+  Complexidade emerge de DORES REAIS, não de "boas práticas"
+```
+
+#### Decisão para Este Projeto (Anki Weekend Addon):
+
+- **Complexidade do domínio:** BAIXA (pause cards + restore)
+- **Solução apropriada:** SIMPLES (1 arquivo ~150 linhas)
+- **Justificativa:** Lógica é trivial, over-engineering seria prejudicial
+- **Estrutura aprovada:** `__init__.py` + `config.json` (2 arquivos)
+
+---
+
 ### 1. Simplicidade Acima de Tudo
 - Código deve ser óbvio à primeira leitura
 - Evitar abstrações desnecessárias
 - Preferir clareza sobre cleverness
 - Se algo parece complicado, provavelmente está errado
 
-### 2. Modularidade
-- Separação clara de responsabilidades
+### 2. Modularidade Apropriada
+- Separação clara de responsabilidades **quando necessário**
 - Cada módulo tem um propósito específico e bem definido
 - Baixo acoplamento entre componentes
-- Fácil de testar isoladamente
+- **Regra:** Só separar em múltiplos arquivos se passar de ~200 linhas
+- **Para este projeto:** 1 arquivo é suficiente
 
 ### 3. Estabilidade e Confiabilidade
-- Código bem testado
+- Código bem testado (testes manuais aceitáveis para projetos simples)
 - Tratamento explícito de edge cases
-- Logging adequado para debugging
+- Logging apenas se necessário para debugging (não prematuro)
 - Fail gracefully - nunca quebrar a experiência do Anki
 
 ### 4. Facilidade de Expansão
-- Arquitetura que permite adicionar features sem reescrever código existente
-- Código autodocumentado
-- Documentação clara de pontos de extensão
+- Arquitetura que permite adicionar features **se precisar** (não "quando precisar")
+- Código autodocumentado (nomes claros > comentários excessivos)
+- Documentação clara de pontos de extensão **reais**
 
 ## Stack Técnica
 
