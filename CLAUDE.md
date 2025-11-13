@@ -224,48 +224,299 @@ def is_weekend(date=None):
 
 ---
 
-## Seções a Preencher (Após Pesquisa e Planejamento)
+## Decisões Técnicas (v2.0 Implementado)
 
-> **IMPORTANTE**: As seções abaixo devem ser preenchidas APÓS:
-> 1. Pesquisa de best practices (@best-practices-researcher)
-> 2. Planejamento arquitetural (/compounding-engineering:plan)
-> 3. Validação das decisões
+### Abordagem de Integração
 
-### Decisões Técnicas
-**Status**: 🔴 Pendente (preencher após pesquisa)
+**Decisão:** Modificação direta de deck configurations via Anki API
 
-Documentar aqui:
-- Abordagem de integração com Anki escolhida
-- Alternativas consideradas e por que foram descartadas
-- Método de filtro de cards (hooks/events/filters/outro)
-- Estratégia de detecção de tipo de card
-- Fontes/referências que informaram as decisões
+**Alternativas Consideradas:**
+1. ❌ **Hooks de Scheduler** - Complexo, invasivo, difícil debug (v1.0 usava)
+2. ❌ **Filtro de Cards** - Não persiste entre sessões
+3. ✅ **Deck Config Modification** - Simples, persiste, sincroniza via AnkiWeb
 
-### Arquitetura e Estrutura
-**Status**: 🔴 Pendente (preencher após plano)
+**Justificativa:**
+- Deck configs são o local "oficial" para limites de novos cards
+- Sincronização automática via AnkiWeb (cross-platform)
+- API estável e documentada (`mw.col.decks`)
+- Reversível (sempre restaura limites originais)
 
-Documentar aqui:
-- Estrutura de módulos/arquivos
-- Fluxo de dados
-- Pontos de integração com Anki
-- Diagrama conceitual (se útil)
+**Trade-offs Aceitos:**
+- Não funciona com deck-specific overrides (documentado como limitação)
+- Documentado em Issue #17 para v2.1
 
-### Configuração do Usuário
-**Status**: 🔴 Pendente (preencher após plano)
+---
 
-Documentar aqui:
-- Formato de configuração
-- Valores padrão
-- Como persistir configurações
-- Interface de configuração (se houver)
+### Armazenamento de Dados
 
-### Estratégia de Testes
-**Status**: 🔴 Pendente (preencher após plano)
+**Decisão:** Armazenamento redundante (Primary + Backup)
 
-Documentar aqui:
-- Como mockar Anki API
-- Casos de teste críticos
-- Abordagem para edge cases
+**Primary Storage:**
+```python
+mw.col.set_config("weekend_addon_original_limits", limits)
+```
+- Dentro de `collection.anki2`
+- Sincroniza via AnkiWeb
+- Sobrevive a reinstalação do addon
+
+**Backup Storage:**
+```python
+mw.addonManager.writeConfig(__name__, config)
+```
+- Arquivo `meta.json` local
+- Fallback se primary falhar
+- Facilita debugging manual
+
+**Lição Aprendida:** Redundância salvou o projeto quando usuário deletou config local
+
+---
+
+### Two-Phase State Capture
+
+**Problema:** Race condition ao capturar limites de decks com config compartilhado
+
+**Solução:**
+```python
+# FASE 1: Captura TUDO primeiro
+for deck in decks:
+    limits[deck] = get_current_limit(deck)
+
+# FASE 2: Modifica TUDO depois
+for deck in decks:
+    set_limit(deck, 0)
+```
+
+**Pattern Aplicável:** Qualquer read-modify-write em estado compartilhado
+
+---
+
+### Validação de Entrada
+
+**Decisão:** Validação explícita de TODOS os valores armazenados
+
+**Implementação:**
+```python
+def validate_original_limit(limit: int) -> int:
+    if not isinstance(limit, int):
+        raise TypeError(...)
+    if limit < MIN_NEW_CARDS or limit > MAX_NEW_CARDS:
+        raise ValueError(...)
+    return limit
+```
+
+**ROI:** 10 linhas previnem horas de debugging × múltiplos usuários = 100x+
+
+---
+
+## Arquitetura e Estrutura (v2.0)
+
+### Estrutura Final
+
+```
+Anki Weekend Addon v2/
+├── __init__.py       # 530 linhas - Lógica principal
+│   ├── Weekend detection (is_weekend)
+│   ├── Config management (get/store limits)
+│   ├── Mode application (apply_weekend_mode, apply_weekday_mode)
+│   ├── Main logic (on_profile_open)
+│   └── Hook registration
+│
+├── ui.py             # 210 linhas - Interface de menu
+│   ├── Menu creation (create_menu)
+│   ├── Mode toggles (toggle_weekend_mode, toggle_travel_mode)
+│   ├── Status dialog (show_status)
+│   └── Dynamic icon updates
+│
+├── i18n.py           # 170 linhas - Sistema de traduções
+│   ├── Translation dictionaries (PT-BR, EN)
+│   ├── Language detection (detect_language)
+│   └── Translation function (tr)
+│
+├── config.json       # 5 linhas - Configuração padrão
+├── manifest.json     # Metadados para Anki 25.x
+└── README.md, CHANGELOG.md, LICENSE
+```
+
+**Evolução da Estimativa:**
+- Planejamento: 1 arquivo (~150 linhas)
+- Realidade: 4 arquivos (~1000 linhas)
+- **Justificativa:** Cada módulo emergiu de necessidade REAL (não over-engineering)
+
+---
+
+### Fluxo de Dados
+
+```
+1. STARTUP
+   └─> on_profile_open()
+       ├─> get_config() - Lê weekend_mode, travel_mode, last_applied_mode
+       ├─> Determina desired_mode (disabled/travel/weekend/weekday)
+       └─> Se mode mudou:
+           ├─> apply_weekend_mode() ou apply_weekday_mode()
+           └─> Salva last_applied_mode
+
+2. USER TOGGLE (via UI)
+   └─> toggle_weekend_mode() ou toggle_travel_mode()
+       ├─> Atualiza config
+       ├─> Chama on_profile_open() - Aplica mudança
+       ├─> Mostra tooltip feedback
+       └─> Atualiza ícone do menu
+
+3. APPLY WEEKEND MODE
+   └─> apply_weekend_mode()
+       ├─> FASE 1: Captura limites atuais (safe capture)
+       │   └─> Só captura valores > 0 ou 0 durante weekdays
+       ├─> FASE 2: Modifica todos configs para 0
+       └─> Salva limites (redundant storage)
+
+4. APPLY WEEKDAY MODE
+   └─> apply_weekday_mode()
+       ├─> Lê limites originais (primary + fallback)
+       ├─> Valida cada limite
+       └─> Restaura para cada deck
+```
+
+---
+
+### Pontos de Integração com Anki
+
+**1. Hooks:**
+```python
+gui_hooks.profile_did_open.append(on_profile_open)
+```
+- Roda ao abrir perfil (startup + sync)
+- Garante modo correto após sync
+
+**2. Deck API:**
+```python
+col.decks.all_names_and_ids()      # Lista decks
+col.decks.get_legacy(deck_id)      # Pega deck
+col.decks.get_config(config_id)    # Pega config
+col.decks.save(config)             # Salva mudanças
+```
+
+**3. Config API:**
+```python
+mw.col.get_config(key)             # Primary storage
+mw.col.set_config(key, value)
+mw.addonManager.getConfig(__name__)  # Backup storage
+mw.addonManager.writeConfig(__name__, config)
+```
+
+**4. UI Integration:**
+```python
+mw.form.menuTools.addMenu(menu)    # Adiciona menu
+QAction, QMenu                      # Qt widgets
+tooltip(), showInfo()               # Anki utils
+```
+
+---
+
+## Configuração do Usuário (v2.0)
+
+### Formato de Configuração
+
+**config.json (padrão):**
+```json
+{
+  "weekend_mode": true,
+  "travel_mode": false,
+  "original_limits": {},
+  "last_applied_mode": null
+}
+```
+
+**meta.json (runtime - gerado pelo Anki):**
+```json
+{
+  "config": {
+    "weekend_mode": true,
+    "travel_mode": false,
+    "original_limits": {
+      "1": 10,
+      "2": 20
+    },
+    "last_applied_mode": "weekday"
+  }
+}
+```
+
+---
+
+### Interface de Configuração
+
+**UI Menu (Tools → Weekend Addon):**
+```
+┌─────────────────────────────┐
+│ ✅ Modo Fim de Semana      │  ← Toggle on/off
+│ ✅ Modo Viagem              │  ← Toggle on/off
+│ Ver Status                  │  ← Dialog detalhado
+└─────────────────────────────┘
+```
+
+**Feedback Visual:**
+- ✅ = Ativado (verde)
+- ❌ = Desativado (vermelho)
+- Tooltips ao alternar
+- Status dialog mostra estado completo
+
+**Decisão de Design:**
+- ✅ UI > Edição manual de JSON (10x menos fricção)
+- ✅ Ícones mostram estado sem precisar verificar config
+- ✅ Um clique vs 4 passos (Tools → Addons → Config → Edit → Save → Restart)
+
+---
+
+## Estratégia de Testes (v2.0)
+
+### Abordagem Atual
+
+**v2.0:** Testes manuais apenas
+
+**Justificativa:**
+- Projeto < 1000 linhas (threshold para automação)
+- Um usuário real fornecendo feedback contínuo
+- Custo/benefício de setup de testes não valia para v2.0
+
+**Casos de Teste Críticos (Manuais):**
+1. ✅ Weekend mode ON → Sábado → Verifica novos cards = 0
+2. ✅ Weekend mode ON → Segunda → Verifica limites restaurados
+3. ✅ Travel mode ON → Qualquer dia → Verifica novos cards = 0
+4. ✅ Travel mode OFF → Restaura limites corretamente
+5. ✅ Sincronização AnkiWeb → Limites persistem entre devices
+6. ✅ Deck-specific overrides → Documenta limitação
+7. ✅ Race condition → Múltiplos decks com mesmo config
+8. ✅ i18n → PT-BR detectado automaticamente
+
+---
+
+### Estratégia Futura (v2.1+)
+
+**Threshold Atingido:** >1000 linhas = automatizar
+
+**Próximos passos:**
+1. **Unit Tests** para lógica core
+   ```python
+   def test_validate_original_limit():
+       assert validate_original_limit(10) == 10
+       with pytest.raises(TypeError):
+           validate_original_limit("10")
+   ```
+
+2. **Integration Tests** com mock de Anki API
+   ```python
+   @patch('mw.col.decks')
+   def test_apply_weekend_mode(mock_decks):
+       # Setup
+       # Execute
+       # Assert
+   ```
+
+3. **Edge Cases Automatizados**
+   - Meia-noite (virada de dia)
+   - Sync durante aplicação de modo
+   - Config corrompido
+   - Collection.anki2 ausente
 
 ---
 
@@ -282,299 +533,98 @@ Documentar aqui:
 
 ---
 
-## Lições Aprendidas (v2.0 Implementation)
+## Lições Aprendidas - Meta-Patterns
 
-### 1. Modularização Emergente vs Prematura
+> Patterns que NÃO se encaixam nas seções técnicas acima
 
-**Planejamento Inicial:**
-- Estimativa: 1 arquivo (~150 linhas)
-- Justificativa: "Lógica é trivial"
+### 1. UI Reduz Fricção Exponencialmente
 
-**Realidade:**
-- Implementação: 4 arquivos (~1000 linhas totais)
-  - `__init__.py` (~530 linhas) - Lógica principal
-  - `ui.py` (~210 linhas) - Interface
-  - `i18n.py` (~170 linhas) - Traduções
-  - `config.json` (~5 linhas) - Config
+**Impacto Observado:**
+- Antes: 4 passos (Tools → Addons → Config → Edit JSON → Save → Restart)
+- Depois: 1 clique (Tools → Weekend Addon → Toggle)
+- **Resultado:** Feedback do usuário mudou de "muito trabalhoso" para "perfeito!"
 
-**Lição:** ✅ **A modularização emergiu naturalmente de necessidades REAIS**
-- UI surgiu de feedback: "muito trabalhoso editar JSON manualmente"
-- i18n surgiu de requisito: "detectar idioma automaticamente"
-- Separação foi justificada (cada módulo > 150 linhas com responsabilidade clara)
-- **NÃO foi over-engineering** - cada módulo resolveu dor real
-
-**Princípio Validado:** Complexidade deve emergir de problemas reais, não de antecipação.
+**Lição:** UI não é "polimento" - é diferença entre ferramenta de dev e produto real
 
 ---
 
-### 2. Race Conditions em Captura de Estado
+### 2. Performance Optimization - Otimize o Caso Comum
 
-**Problema Descoberto:**
+**Pattern Aplicado:**
 ```python
-# ❌ ERRADO (v2.0 inicial)
-for deck in decks:
-    original = get_current_limit(deck)  # Ex: 10
-    store_limit(deck, original)          # Salva 10
-    set_limit(deck, 0)                   # Muda para 0
-    # Próximo deck com mesmo config vê 0! ❌
-```
-
-**Solução - Two-Phase Approach:**
-```python
-# ✅ CORRETO (v2.0 final)
-# FASE 1: Captura TUDO primeiro
-for deck in decks:
-    limits[deck] = get_current_limit(deck)
-
-# FASE 2: Modifica TUDO depois
-for deck in decks:
-    set_limit(deck, 0)
-```
-
-**Lição:** ✅ **Separar leitura de escrita previne race conditions**
-- Especialmente crítico quando múltiplos decks compartilham config
-- Pattern aplicável: banco de dados, file I/O, APIs
-
-**Aplicação Futura:** Sempre que ler/modificar estado compartilhado, usar pattern two-phase.
-
----
-
-### 3. Validação de Dados é Investimento, Não Custo
-
-**Bug da v1.0:**
-- Limites restaurados incorretamente (10 → 20)
-- Causa: Nenhuma validação de valores armazenados
-
-**Solução v2.0:**
-```python
-def validate_original_limit(limit: int) -> int:
-    if not isinstance(limit, int):
-        raise TypeError(f"Limit must be integer, got {type(limit).__name__}")
-    if limit < 0 or limit > 9999:
-        raise ValueError(f"Limit must be 0-9999, got {limit}")
-    return limit
-```
-
-**Impacto:**
-- ✅ Previne corrupção de dados
-- ✅ Falha rápido com mensagens claras
-- ✅ Evita debugging de 2 horas "por que restaurou 20 em vez de 10?"
-
-**Lição:** ✅ **Validação explícita economiza MUITO tempo de debugging**
-- Especialmente crítico em dados persistidos (sobrevivem ao restart)
-- Custo: ~10 linhas de código
-- Benefício: Previne horas de debugging + perda de confiança do usuário
-
-**ROI:** 100x+ (10 linhas vs 2h debugging × múltiplos usuários)
-
----
-
-### 4. UI Reduz Fricção Exponencialmente
-
-**Antes (v2.0 inicial):**
-```json
-// Usuário precisa:
-// 1. Ir em Tools → Add-ons → Config
-// 2. Editar JSON manualmente
-// 3. Salvar
-// 4. Reiniciar Anki
-{
-  "travel_mode": true  // ← Editar isto
-}
-```
-
-**Depois:**
-- Tools → Weekend Addon → ✅ Modo Viagem (um clique)
-
-**Impacto:**
-- Feedback do usuário: "muito trabalhoso" → "perfeito!"
-- Adoção esperada: 10x maior
-- Suporte: Reduz perguntas "como faço X?"
-
-**Lição:** ✅ **UI não é "polimento" - é acessibilidade**
-- Mesmo usuários técnicos preferem cliques > JSON
-- UI revela estado (ícones ✅/❌) sem precisar "verificar config"
-- **Investimento:** ~200 linhas de código
-- **Retorno:** Diferença entre "ferramenta de dev" e "produto"
-
----
-
-### 5. i18n Desde o Início (Quando Relevante)
-
-**Decisão v2.0:**
-- Requisito: Suporte PT-BR (usuário brasileiro)
-- Implementação: Sistema completo desde v1
-
-**Alternativa NÃO tomada:**
-- "Fazemos em inglês primeiro, depois traduzimos"
-
-**Por que foi correto:**
-- Usuário principal é PT-BR
-- Adicionar depois = refactor massivo de strings
-- ~170 linhas para sistema completo
-- Custo futuro evitado: Reescrever todas as strings
-
-**Lição:** ✅ **Se você SABE que precisa de i18n, faça desde o início**
-- Não é "preparar para o futuro" - é requisito conhecido
-- Estrutura simples (dict de traduções) é suficiente
-- **Red flag evitada:** Strings hardcoded espalhadas pelo código
-
-**Princípio:** Distinguir "requisito conhecido" de "especulação futura"
-
----
-
-### 6. Armazenamento Redundante Salvou o Projeto
-
-**Estratégia v2.0:**
-```python
-# Primary: collection.anki2 (sincroniza via AnkiWeb)
-mw.col.set_config("weekend_addon_original_limits", limits)
-
-# Backup: addon config (local)
-mw.addonManager.writeConfig(__name__, config)
-```
-
-**Evento Real:**
-- Usuário testou, deletou config local, mudou de device
-- Primary storage (collection.anki2) sincronizou via AnkiWeb
-- Limites foram restaurados corretamente! ✅
-
-**Lição:** ✅ **Redundância crítica != over-engineering**
-- Dados de usuário (limites originais) são CRÍTICOS
-- Perder esses dados = addon quebra permanentemente
-- Custo: ~5 linhas extras
-- Benefício: Resiliência contra perda de dados
-
-**Princípio:** Para dados críticos de usuário, sempre ter backup strategy.
-
----
-
-### 7. Performance Optimization Baseada em Dados Reais
-
-**Problema Observado:**
-- Addon rodava em CADA abertura de perfil
-- Iterava 100% dos decks mesmo quando modo não mudou
-
-**Solução - Lazy Update:**
-```python
-current_mode = config.get('last_applied_mode')
 if current_mode != desired_mode:
-    apply_changes()  # Só roda se modo MUDOU
-    config['last_applied_mode'] = desired_mode
+    apply_changes()  # Só roda em 5% dos casos
 ```
 
 **Impacto:**
-- 95% das vezes: SKIP (modo não mudou)
-- 5% das vezes: Roda (modo realmente mudou)
-- Performance: 20x melhoria
+- 95% dos opens: SKIP (modo não mudou)
+- 5% dos opens: RUN (modo mudou)
+- **Performance:** 20x melhoria
 
-**Lição:** ✅ **Otimize o caso comum, não o caso raro**
-- Caso comum: Abrir Anki em dia de semana (modo não muda)
-- Caso raro: Virada de semana (modo muda)
-- **Pattern:** Cache last state, compare antes de processar
-
-**Aplicação Futura:** Qualquer operação cara que depende de estado - sempre comparar primeiro.
+**Princípio:** Cache last state, compare antes de processar
 
 ---
 
-### 8. Documentação é Código que Nunca Quebra
+### 3. Documentação é Ativo que Aprecia com Tempo
 
 **Investimento v2.0:**
-- README.md (~200 linhas)
-- CHANGELOG.md (~100 linhas)
-- CLAUDE.md (~300 linhas)
-- Docstrings em todas as funções
+- README + CHANGELOG + CLAUDE.md = ~600 linhas
+- Docstrings em todas funções
 
-**Retorno:**
-- Zero perguntas "como instalar?"
-- Zero perguntas "como usar?"
-- Futuro eu consegue entender código em 6 meses
-- Contribuidores sabem por onde começar
-
-**Lição:** ✅ **Boa documentação é investimento com juros compostos**
-- Cada pergunta evitada = tempo economizado
-- Cada contexto preservado = debugging mais rápido
-- **ROI aumenta com tempo** (diferente de código que envelhece)
-
-**Princípio Compounding Engineering:** Documentação é ativo que APRECIA com tempo.
+**ROI:**
+- Zero perguntas de instalação/uso
+- Futuro eu entende código em 6 meses
+- **ROI aumenta com tempo** (diferente de código que deprecia)
 
 ---
 
-### 9. Git Workflow Disciplinado Permite Experimentação Segura
+### 4. Git Workflow = Liberdade para Experimentar
 
-**Prática v2.0:**
-- NUNCA commit direto em main
-- Feature branches para tudo
-- Merge apenas quando funcionando
+**Paradoxo:** Mais estrutura → Mais liberdade
 
 **Benefício Real:**
-- Pude experimentar 3 abordagens diferentes de i18n
-- Quebrei código várias vezes sem medo
+- Experimentei 3 abordagens de i18n sem medo
 - Main sempre deployable
-
-**Lição:** ✅ **Feature branches não são burocracia - são liberdade**
-- Paradoxo: Mais estrutura = mais liberdade para experimentar
-- Cost: ~10 segundos para criar branch
-- Benefit: Segurança psicológica para experimentar
+- **Custo:** 10 segundos criar branch
+- **Benefício:** Segurança psicológica
 
 ---
 
-### 10. "Simplicidade Apropriada" é Contextual
+### 5. Feedback Real > 100h de Especulação
+
+**Eventos Críticos:**
+1. "muito trabalhoso editar JSON" → UI surgiu
+2. "deck X não funciona" → Descobrimos limitação
+3. "ícone no lugar errado" → UX ajustado
+
+**Lição:** Ship fast, iterate com usuário real. Nunca teríamos previsto essas dores.
+
+---
+
+### 6. "Simplicidade" é Contextual
 
 **Planejamento:** 1 arquivo (~150 linhas)
 **Realidade:** 4 arquivos (~1000 linhas)
+**Foi falha?** ❌ NÃO - Complexidade emergiu de necessidades REAIS
 
-**Isso foi falha do planejamento?** ❌ NÃO!
-
-**Por quê:**
-- Planejamento subestimou requisitos (UI, i18n surgiram depois)
-- Cada adição foi JUSTIFICADA por necessidade real
-- Arquitetura permaneceu simples (sem abstrações desnecessárias)
-- **Princípio mantido:** Complexidade emergiu de problemas reais
-
-**Lição:** ✅ **"Simples" não significa "pequeno em linhas de código"**
-- Simples = Fácil de entender, sem abstrações desnecessárias
-- 1000 linhas diretas > 200 linhas com metaprogramação
-- **Métrica correta:** "Quanto tempo para entender?" não "Quantas linhas?"
-
----
-
-### 11. Feedback Loop com Usuário Real é Insubstituível
-
-**Eventos:**
-1. Usuário: "muito trabalhoso editar JSON"
-   → Resultado: UI foi criado
-2. Usuário: "deck X não funciona"
-   → Resultado: Descobrimos limitação deck-specific overrides
-3. Usuário: "ícone no lugar errado"
-   → Resultado: Movemos ícone para menu item
-
-**Lição:** ✅ **Usuário real > 100 horas de especulação**
-- Cada feedback revelou problema que NUNCA teríamos previsto
-- Features que importam emergem de uso real
-- **Pattern:** Ship fast, iterate com feedback real
-
-**Aplicação Futura:** Sempre ter 1 usuário real antes de escalar.
+**Métrica Correta:** "Tempo para entender" > "Número de linhas"
 
 ---
 
 ## Princípios Validados (Compounding Engineering)
 
-### ✅ O que funcionou:
-1. **Two-phase operations** para state compartilhado
-2. **Validação explícita** de dados críticos
-3. **Armazenamento redundante** para resiliência
-4. **UI reduz fricção** massivamente
-5. **i18n desde início** quando requisito conhecido
-6. **Documentação como investimento**
-7. **Git workflow estruturado** = liberdade experimental
-8. **Feedback real > especulação**
+### ✅ Funcionou:
+- Two-phase operations (previne race conditions)
+- Validação explícita (ROI 100x+)
+- Armazenamento redundante (salvou o projeto)
+- UI desde início quando requisito conhecido
+- Documentação como investimento
+- Git workflow estruturado
+- Feedback loop com usuário real
 
-### ❌ O que ajustar:
-1. **Estimativas iniciais** muito otimistas (1 arquivo → 4 arquivos)
-   - **Ajuste futuro:** Multiplicar estimativa por 3x quando há usuário real
-2. **Testing manual** suficiente para v2.0, mas v2.1+ precisa de testes automatizados
-   - **Threshold:** >1000 linhas = automatizar testes
+### ⚠️ Ajustar:
+- **Estimativas:** Multiplicar por 3x quando há usuário real
+- **Testes:** >1000 linhas = automatizar (threshold atingido) testes
 
 ---
 
