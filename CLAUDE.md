@@ -20,9 +20,12 @@ A versão 1.0 sofreu de:
 
 A v2.0 é uma reescrita completa focada em **simplicidade, estabilidade e manutenibilidade**.
 
-## Princípios Arquiteturais
+## ⭐ Princípios Universais (Aplicam a QUALQUER Projeto)
 
-### 0. PRINCÍPIO: Simplicidade Apropriada ⭐
+> Estes princípios transcendem tecnologia, linguagem e domínio.
+> Use como checklist em TODO projeto de software.
+
+### 1. Simplicidade Apropriada
 
 **Começar sempre com a solução mais simples que funciona.**
 **Adicionar complexidade APENAS quando necessário e JUSTIFICADO.**
@@ -62,29 +65,169 @@ v2.0+: Adiciona estrutura onde v1.0 DOEU
 
 ---
 
+### 2. Validação Explícita > Debugging Implícito
+
+**Princípio:** Falhe rápido com mensagens claras
+
+**Aplicação:**
+- Valide inputs em funções críticas
+- Type hints + runtime validation
+- Custo: ~10 linhas
+- Benefício: Previne horas de debugging
+
+**ROI Real (v2.0):** 100x+ (validação evitou bug de corrupção de dados)
+
+---
+
+### 3. UI Reduz Fricção Exponencialmente
+
+**Princípio:** UI não é polimento - é acessibilidade
+
+**Aplicação:**
+- Preferir 1 clique > múltiplos passos
+- Estado visível sem precisar "verificar"
+- Mesmo usuários técnicos preferem cliques > config manual
+
+**ROI Real (v2.0):** 10x adoção esperada (feedback: "muito trabalhoso" → "perfeito!")
+
+---
+
+### 4. Documentação é Ativo que Aprecia
+
+**Princípio:** Documentação tem ROI crescente no tempo
+
+**Aplicação:**
+- README completo
+- Decisões técnicas documentadas
+- CHANGELOG detalhado
+- Cada pergunta evitada = tempo economizado
+
+**Diferencial:** Código deprecia, documentação aprecia
+
+---
+
+### 5. Feedback Real > Especulação
+
+**Princípio:** Ship fast, iterate com usuário real
+
+**Aplicação:**
+- 1 usuário real > 100h de planejamento
+- Features emergem de dores reais
+- "Mas e se..." sem caso de uso concreto é red flag
+
+**ROI Real (v2.0):** Cada feature (UI, i18n, ícones) veio de feedback que NUNCA teríamos previsto
+
+---
+
+### 6. Git Workflow = Liberdade Experimental
+
+**Princípio:** Mais estrutura → Mais liberdade
+
+**Aplicação:**
+- Feature branches sempre
+- Main sempre deployable
+- Custo: 10 segundos
+- Benefício: Segurança psicológica para experimentar
+
+**Paradoxo:** Disciplina cria liberdade
+
+---
+
+## 💡 Patterns Reutilizáveis (Maioria dos Projetos)
+
+> Patterns técnicos validados neste projeto, aplicáveis a maioria dos projetos de software.
+
+### 1. Two-Phase Operations
+
+**Problema:** Race conditions em read-modify-write de estado compartilhado
+
+**Pattern:**
+```python
+# FASE 1: Read ALL
+for item in items:
+    state[item] = read(item)
+
+# FASE 2: Write ALL
+for item in items:
+    write(item, new_value)
+```
+
+**Aplicável:** Banco de dados, file I/O, APIs, qualquer estado compartilhado
+
+---
+
+### 2. Armazenamento Redundante para Dados Críticos
+
+**Princípio:** Primary + Backup para dados que, se perdidos, quebram sistema
+
+**Pattern:**
+```python
+# Primary: Sincroniza entre devices
+save_to_primary_storage(data)
+
+# Backup: Local fallback
+save_to_backup_storage(data)
+```
+
+**Threshold:** Dados críticos de usuário (perder = sistema quebra permanentemente)
+
+**ROI Real (v2.0):** Salvou projeto quando usuário deletou config local
+
+---
+
+### 3. Performance - Otimize o Caso Comum
+
+**Pattern:** Cache last state, compare antes de processar
+
+```python
+if current_state != desired_state:
+    expensive_operation()  # Só roda quando MUDOU
+    cache_state(desired_state)
+```
+
+**ROI Real (v2.0):** 20x melhoria (95% skip, 5% run)
+
+---
+
+### 4. Modularização Emergente vs Prematura
+
+**Princípio:** Complexidade deve emergir de problemas REAIS
+
+**Red Flags:**
+- Separação de arquivos com total < 200 linhas
+- "Preparado para o futuro" sem caso de uso
+- Mais de 3 abstrações sem justificativa
+
+**Threshold:** Só separar módulos quando passar ~200 linhas OU responsabilidade clara
+
+---
+
+### 5. Estimativas com Usuário Real
+
+**Ajuste:** Multiplicar estimativa por 3x quando há usuário real
+
+**Por quê:** Feedback revela requisitos não previstos (UI, i18n, UX ajustes)
+
+**ROI Real (v2.0):** Planejado 1 arquivo (150 linhas) → Real 4 arquivos (1000 linhas)
+- Não foi falha - complexidade emergiu de necessidades reais
+
+---
+
+## 📋 Princípios Específicos deste Projeto
+
 ### 1. Simplicidade Acima de Tudo
 - Código deve ser óbvio à primeira leitura
 - Evitar abstrações desnecessárias
 - Preferir clareza sobre cleverness
-- Se algo parece complicado, provavelmente está errado
 
-### 2. Modularidade Apropriada
-- Separação clara de responsabilidades **quando necessário**
-- Cada módulo tem um propósito específico e bem definido
-- Baixo acoplamento entre componentes
-- **Regra:** Só separar em múltiplos arquivos se passar de ~200 linhas
-- **Para este projeto:** 1 arquivo é suficiente
-
-### 3. Estabilidade e Confiabilidade
-- Código bem testado (testes manuais aceitáveis para projetos simples)
+### 2. Estabilidade e Confiabilidade
 - Tratamento explícito de edge cases
-- Logging apenas se necessário para debugging (não prematuro)
-- Fail gracefully - nunca quebrar a experiência do Anki
+- Fail gracefully - nunca quebrar experiência do Anki
+- Logging apenas quando necessário
 
-### 4. Facilidade de Expansão
-- Arquitetura que permite adicionar features **se precisar** (não "quando precisar")
+### 3. Facilidade de Expansão
+- Arquitetura permite adicionar features **se precisar**
 - Código autodocumentado (nomes claros > comentários excessivos)
-- Documentação clara de pontos de extensão **reais**
 
 ## Git Workflow (OBRIGATÓRIO)
 
@@ -530,101 +673,6 @@ tooltip(), showInfo()               # Anki utils
 ### Comunidade
 - [Anki Add-ons Forum](https://forums.ankiweb.net/c/add-ons/11)
 - [r/Anki Subreddit](https://reddit.com/r/Anki)
-
----
-
-## Lições Aprendidas - Meta-Patterns
-
-> Patterns que NÃO se encaixam nas seções técnicas acima
-
-### 1. UI Reduz Fricção Exponencialmente
-
-**Impacto Observado:**
-- Antes: 4 passos (Tools → Addons → Config → Edit JSON → Save → Restart)
-- Depois: 1 clique (Tools → Weekend Addon → Toggle)
-- **Resultado:** Feedback do usuário mudou de "muito trabalhoso" para "perfeito!"
-
-**Lição:** UI não é "polimento" - é diferença entre ferramenta de dev e produto real
-
----
-
-### 2. Performance Optimization - Otimize o Caso Comum
-
-**Pattern Aplicado:**
-```python
-if current_mode != desired_mode:
-    apply_changes()  # Só roda em 5% dos casos
-```
-
-**Impacto:**
-- 95% dos opens: SKIP (modo não mudou)
-- 5% dos opens: RUN (modo mudou)
-- **Performance:** 20x melhoria
-
-**Princípio:** Cache last state, compare antes de processar
-
----
-
-### 3. Documentação é Ativo que Aprecia com Tempo
-
-**Investimento v2.0:**
-- README + CHANGELOG + CLAUDE.md = ~600 linhas
-- Docstrings em todas funções
-
-**ROI:**
-- Zero perguntas de instalação/uso
-- Futuro eu entende código em 6 meses
-- **ROI aumenta com tempo** (diferente de código que deprecia)
-
----
-
-### 4. Git Workflow = Liberdade para Experimentar
-
-**Paradoxo:** Mais estrutura → Mais liberdade
-
-**Benefício Real:**
-- Experimentei 3 abordagens de i18n sem medo
-- Main sempre deployable
-- **Custo:** 10 segundos criar branch
-- **Benefício:** Segurança psicológica
-
----
-
-### 5. Feedback Real > 100h de Especulação
-
-**Eventos Críticos:**
-1. "muito trabalhoso editar JSON" → UI surgiu
-2. "deck X não funciona" → Descobrimos limitação
-3. "ícone no lugar errado" → UX ajustado
-
-**Lição:** Ship fast, iterate com usuário real. Nunca teríamos previsto essas dores.
-
----
-
-### 6. "Simplicidade" é Contextual
-
-**Planejamento:** 1 arquivo (~150 linhas)
-**Realidade:** 4 arquivos (~1000 linhas)
-**Foi falha?** ❌ NÃO - Complexidade emergiu de necessidades REAIS
-
-**Métrica Correta:** "Tempo para entender" > "Número de linhas"
-
----
-
-## Princípios Validados (Compounding Engineering)
-
-### ✅ Funcionou:
-- Two-phase operations (previne race conditions)
-- Validação explícita (ROI 100x+)
-- Armazenamento redundante (salvou o projeto)
-- UI desde início quando requisito conhecido
-- Documentação como investimento
-- Git workflow estruturado
-- Feedback loop com usuário real
-
-### ⚠️ Ajustar:
-- **Estimativas:** Multiplicar por 3x quando há usuário real
-- **Testes:** >1000 linhas = automatizar (threshold atingido) testes
 
 ---
 
