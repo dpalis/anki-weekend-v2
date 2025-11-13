@@ -16,6 +16,9 @@ from typing import Any
 from aqt import mw, gui_hooks
 from datetime import datetime
 
+# Import UI components
+from .ui import create_menu
+
 
 # ==========================================
 # Constants
@@ -244,8 +247,9 @@ def apply_weekend_mode() -> None:
     Stores original limits before modification for later restoration.
     Changes are marked for AnkiWeb sync automatically.
 
-    Note: On first run during weekend with limits already at 0,
-    waits until weekday to capture real original values.
+    IMPORTANT: Always recaptures current limits when transitioning from
+    weekday mode to weekend/travel mode. This ensures we capture the
+    user's ACTUAL current limits, not stale values from previous sessions.
 
     Optimization: Reads config once and batches all writes (100x faster).
 
@@ -259,8 +263,11 @@ def apply_weekend_mode() -> None:
 
     # Read config ONCE
     addon_config = get_config()
-    original_limits = addon_config.setdefault('original_limits', {})
-    collection_limits = _get_collection_limits()
+
+    # ALWAYS clear limits when entering weekend/travel mode
+    # This forces fresh capture of current user-set limits
+    original_limits = {}
+    collection_limits = {}
     limits_modified = False
 
     success_count = 0
@@ -273,6 +280,9 @@ def apply_weekend_mode() -> None:
     except Exception as e:
         print(f"[Weekend Addon] ERROR: Failed to get deck list: {e}")
         return
+
+    # PHASE 1: Capture all current limits BEFORE modifying anything
+    configs_to_modify = {}  # config_id -> config object
 
     for deck_id in deck_ids:
         try:
@@ -288,6 +298,12 @@ def apply_weekend_mode() -> None:
                 skip_count += 1
                 continue
 
+            config_id_str = str(deck['conf'])
+
+            # Skip if already captured this config
+            if config_id_str in collection_limits:
+                continue
+
             # Get deck config
             config = col.decks.get_config(deck['conf'])
             if not config:
@@ -301,54 +317,55 @@ def apply_weekend_mode() -> None:
                 skip_count += 1
                 continue
 
-            config_id_str = str(deck['conf'])
+            # Capture current limit BEFORE any modification
+            try:
+                current_limit = config['new']['perDay']
+                validated_limit = validate_original_limit(current_limit)
 
-            # Capture original if not already stored (in MEMORY, not disk yet)
-            if config_id_str not in collection_limits and config_id_str not in original_limits:
-                try:
-                    current_limit = config['new']['perDay']
+                # IMPORTANT: Only capture if it's a safe value
+                # Skip capturing 0 during weekends (might be from previous addon run)
+                # Always capture positive values or 0 during weekdays
+                should_capture = (
+                    validated_limit > 0 or  # Positive value is always safe
+                    not is_weekend()  # Zero during weekday means user wants 0
+                )
 
-                    # Validate limit
-                    validated_limit = validate_original_limit(current_limit)
+                if should_capture:
+                    collection_limits[config_id_str] = validated_limit
+                    original_limits[config_id_str] = validated_limit
+                    limits_modified = True
 
-                    # Safe capture logic
-                    if validated_limit > 0:
-                        # Safe: positive value is reliable
-                        collection_limits[config_id_str] = validated_limit
-                        original_limits[config_id_str] = validated_limit
-                        limits_modified = True
-                    elif not is_weekend():
-                        # Weekday with limit=0: user really wants 0
-                        collection_limits[config_id_str] = validated_limit
-                        original_limits[config_id_str] = validated_limit
-                        limits_modified = True
-                    # Else: Weekend with limit=0: WAIT for weekday
-                    # (don't store anything yet)
-                except (TypeError, ValueError) as e:
-                    print(f"[Weekend Addon] WARNING: Invalid limit for config {deck['conf']}: {e}")
-                    # Continue anyway - at least pause the deck
-                except Exception as e:
-                    print(f"[Weekend Addon] WARNING: Failed to store original limit for config {deck['conf']}: {e}")
-                    # Continue anyway - at least pause the deck
+                # Store config for modification in phase 2 regardless
+                configs_to_modify[config_id_str] = config
 
-            # Set limit to 0
-            config['new']['perDay'] = 0
-            col.decks.save(config)
-            success_count += 1
+            except (TypeError, ValueError) as e:
+                print(f"[Weekend Addon] WARNING: Invalid limit for config {deck['conf']}: {e}")
+            except Exception as e:
+                print(f"[Weekend Addon] WARNING: Failed to capture limit for config {deck['conf']}: {e}")
 
         except (KeyError, AttributeError, TypeError) as e:
-            # Structure/type errors - specific deck issue
             error_count += 1
             print(f"[Weekend Addon] ERROR processing deck {deck_id.id}: {type(e).__name__}: {e}")
             continue
-
         except Exception as e:
-            # Unexpected error - log but continue
             error_count += 1
             print(f"[Weekend Addon] UNEXPECTED ERROR processing deck {deck_id.id}: {e}")
             import traceback
             traceback.print_exc()
             continue
+
+    # PHASE 2: Now modify all configs to 0
+    for config_id_str, config in configs_to_modify.items():
+        try:
+            config['new']['perDay'] = 0
+            col.decks.save(config)
+            success_count += 1
+
+        except Exception as e:
+            error_count += 1
+            print(f"[Weekend Addon] ERROR modifying config {config_id_str}: {e}")
+            import traceback
+            traceback.print_exc()
 
     # BATCH WRITE: Write config ONCE at the end (if modified)
     if limits_modified:
@@ -451,12 +468,13 @@ def apply_weekday_mode() -> None:
 def on_profile_open() -> None:
     """
     Execute when profile opens (startup + sync).
-    Applies appropriate mode based on travel mode flag or current day.
+    Applies appropriate mode based on weekend_mode, travel_mode, and current day.
 
     Priority:
-        1. Travel mode (if enabled): Apply weekend mode
-        2. Weekend (Sat/Sun): Apply weekend mode
-        3. Weekday (Mon-Fri): Apply weekday mode (restore limits)
+        1. Weekend mode disabled: No automatic changes
+        2. Travel mode (if enabled): Apply weekend mode
+        3. Weekend (Sat/Sun): Apply weekend mode
+        4. Weekday (Mon-Fri): Apply weekday mode (restore limits)
 
     Optimization: Tracks last applied mode to avoid unnecessary
     deck iteration when mode hasn't changed (95% performance improvement).
@@ -470,8 +488,13 @@ def on_profile_open() -> None:
 
         config = get_config()
 
+        # Check if weekend mode is enabled
+        weekend_mode_enabled = config.get('weekend_mode', True)
+
         # Determine desired mode
-        if config.get('travel_mode', False):
+        if not weekend_mode_enabled:
+            desired_mode = 'disabled'
+        elif config.get('travel_mode', False):
             desired_mode = 'travel'
         elif is_weekend():
             desired_mode = 'weekend'
@@ -484,7 +507,10 @@ def on_profile_open() -> None:
         # OPTIMIZATION: Apply ONLY if mode changed
         if current_mode != desired_mode:
             # Mode changed - apply update
-            if desired_mode in ['weekend', 'travel']:
+            if desired_mode == 'disabled':
+                # Weekend mode is OFF - restore original limits
+                apply_weekday_mode()
+            elif desired_mode in ['weekend', 'travel']:
                 apply_weekend_mode()
             else:
                 apply_weekday_mode()
@@ -502,8 +528,12 @@ def on_profile_open() -> None:
 
 
 # ==========================================
-# Hook Registration
+# Hook Registration & UI Initialization
 # ==========================================
 
 # Register hook to run on profile open (startup + profile switch)
 gui_hooks.profile_did_open.append(on_profile_open)
+
+# Create menu in Tools
+if mw:
+    create_menu()

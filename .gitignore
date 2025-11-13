@@ -50,8 +50,8 @@ htmlcov/
 # Anki specific
 *.apkg
 *.colpkg
+*.ankiaddon
 
 # Temporary files
 *.log
 *.tmp
-.ankiaddon
