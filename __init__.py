@@ -412,10 +412,19 @@ def apply_weekday_mode() -> None:
             # Restore original if exists (from in-memory dict)
             config_id_str = str(deck['conf'])
             original = original_limits.get(config_id_str)
+
             if original is not None:
-                config['new']['perDay'] = original
-                col.decks.save(config)
-                success_count += 1
+                # VALIDATE BEFORE RESTORATION
+                try:
+                    validated = validate_original_limit(original)
+                    config['new']['perDay'] = validated
+                    col.decks.save(config)
+                    success_count += 1
+                except (TypeError, ValueError) as e:
+                    # Corruption detected - log and skip
+                    print(f"[Weekend Addon] ERROR: Corrupted limit for config {config_id_str}: {original} ({type(original).__name__})")
+                    print(f"[Weekend Addon] HINT: Check Tools → Add-ons → Weekend Addon → Config to fix invalid entry")
+                    skip_count += 1
             else:
                 skip_count += 1
 
